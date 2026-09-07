@@ -232,10 +232,10 @@ def top_frame(frame: pd.DataFrame, col: str, n: int) -> pd.DataFrame:
 # ----- Cascading impact (LOG SCALE) --------------------------------------- #
 with tab_casc:
     st.subheader("Cascading output impact, Δx = L · Δd")
-    st.caption("Bars on a **log scale** (base 10) — only commodities with a positive Δx are shown.")
+    st.caption("Incremental gross output forced across the network, ranked by magnitude.")
     top_n = st.slider("Show top N commodities", 3, len(industries),
                       min(TOP_N_DEFAULT, len(industries)), key="topn_casc")
-    pos = casc[casc["delta_x"] > 0]
+    pos = casc[casc["delta_x"] != 0]
     top = top_frame(pos, "delta_x", top_n).reset_index()
 
     if len(top):
@@ -244,8 +244,7 @@ with tab_casc:
             .mark_bar(color="#1F6F5C")
             .encode(
                 x=alt.X("delta_x:Q",
-                        title="Incremental output Δx (kg, log scale)",
-                        scale=alt.Scale(type="log"),
+                        title="Incremental output Δx (kg)",
                         axis=alt.Axis(format="~s")),
                 y=alt.Y("industry:N", sort="-x", title=None),
                 tooltip=[
@@ -358,8 +357,7 @@ with tab_waste:
             .mark_bar(color="#C4622D")
             .encode(
                 x=alt.X("delta_waste:Q",
-                        title="Incremental waste ΔW (kg, log scale)",
-                        scale=alt.Scale(type="log"),
+                        title="Incremental waste ΔW (kg)",
                         axis=alt.Axis(format="~s")),
                 y=alt.Y("industry:N", sort="-x", title=None),
                 tooltip=[
