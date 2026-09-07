@@ -3,9 +3,9 @@ Cascading Impact Explorer — an interactive Streamlit front end for the
 demand-driven Leontief cascading-impact model on a Physical Input-Output
 Table (PIOT).
 
-Slide the final-demand increase for any commodity and watch the cascading
-output impact, the tier-by-tier decomposition, and the waste cascade update
-live.
+Slide the final-demand increase (% of each commodity's baseline final demand)
+and watch the cascading output impact, the tier-by-tier decomposition, and the
+waste cascade update live.
 
 Run with:
     streamlit run app.py
@@ -13,6 +13,7 @@ Run with:
 
 from __future__ import annotations
 
+import glob
 import io
 import os
 
@@ -44,21 +45,28 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-DEFAULT_CSV = os.path.join(os.path.dirname(__file__), "PIOT_ModelD_APAP_workshop.csv")
+# The bundled PIOT. Falls back to the first CSV in the folder if the exact
+# name changes, so a renamed data file in the repo still loads.
+_HERE = os.path.dirname(__file__)
+_PREFERRED = os.path.join(_HERE, "PIOT APAP Model Cascading 1.csv")
 
-SHOCK_MODES = {
-    "% of baseline final demand": "pct_final_demand",
-    "% of baseline gross output": "pct_gross_output",
-    "Absolute increase (kg)": "absolute_kg",
-}
+
+def _default_csv_path() -> str:
+    if os.path.exists(_PREFERRED):
+        return _PREFERRED
+    candidates = sorted(glob.glob(os.path.join(_HERE, "*.csv")))
+    return candidates[0] if candidates else _PREFERRED
+
+
+DEFAULT_CSV = _default_csv_path()
 
 
 # --------------------------------------------------------------------------- #
 # Data loading (cached)
 # --------------------------------------------------------------------------- #
 @st.cache_data(show_spinner=False)
-def _load_default_bytes() -> bytes:
-    with open(DEFAULT_CSV, "rb") as fh:
+def _load_default_bytes(path: str) -> bytes:
+    with open(path, "rb") as fh:
         return fh.read()
 
 
@@ -94,11 +102,12 @@ with st.sidebar.expander("1 · Data source", expanded=False):
         help=(
             "Industries as both rows and columns, plus meta columns "
             "ROE, EXPORTS, FINAL_DEMAND, WASTE. Leave empty to use the bundled "
-            "Acetaminophen (Model D) workshop table."
+            "Acetaminophen PIOT."
         ),
     )
+    st.caption(f"Bundled file: **{os.path.basename(DEFAULT_CSV)}**")
 
-file_bytes = uploaded.getvalue() if uploaded is not None else _load_default_bytes()
+file_bytes = uploaded.getvalue() if uploaded is not None else _load_default_bytes(DEFAULT_CSV)
 
 try:
     df, industries, net = load_and_build(file_bytes)
@@ -109,19 +118,14 @@ except Exception as exc:  # noqa: BLE001
 x0 = net["x0"]
 d0 = net["d0"]
 
+# Shock mode is fixed: % increase in each commodity's baseline final demand.
+MODE = "pct_final_demand"
+
 st.sidebar.markdown("### 2 · Shock definition")
-mode_label = st.sidebar.radio(
-    "How should the sliders be interpreted?",
-    list(SHOCK_MODES.keys()),
-    index=1,
-    help=(
-        "In this PIOT only Acetaminophen has a non-zero baseline *final demand*, "
-        "so '% of baseline final demand' reproduces the original notebook but only "
-        "moves when you shock Acetaminophen. '% of baseline gross output' or "
-        "'Absolute increase (kg)' let you shock any commodity."
-    ),
+st.sidebar.caption(
+    "Each slider is a **% increase in that commodity's baseline final demand**. "
+    "Δdᵢ = d₀ᵢ × (slider ÷ 100)."
 )
-mode = SHOCK_MODES[mode_label]
 
 n_tiers = st.sidebar.slider(
     "Explicit supply-chain tiers",
@@ -131,76 +135,40 @@ n_tiers = st.sidebar.slider(
     help="Tiers 0…(n-1) are shown explicitly; everything deeper is grouped as 'tier n+'.",
 )
 
-# Slider state is namespaced by mode so switching modes can never leave a
-# stored value outside the new mode's range.
-def skey(name: str) -> str:
-    return f"shock_{mode}_{name}"
-
-
 colq1, colq2 = st.sidebar.columns(2)
 if colq1.button("Reset sliders", use_container_width=True):
     for name in industries:
-        st.session_state[skey(name)] = 0.0
+        st.session_state[f"shock_{name}"] = 0.0
 if colq2.button("APAP +15%", use_container_width=True,
-                help="Quick preset: 15% increase, matching the notebook example."):
+                help="Quick preset: 15% increase in Acetaminophen final demand."):
     for name in industries:
-        st.session_state[skey(name)] = 0.0
-    idx = industries.index("Acetaminophen") if "Acetaminophen" in industries else 0
-    apap = industries[idx]
-    if mode == "pct_final_demand":
-        st.session_state[skey(apap)] = 15.0
-    elif mode == "pct_gross_output":
-        # 15% of APAP final demand expressed against gross output
-        st.session_state[skey(apap)] = float(100.0 * d0[idx] * 0.15 / x0[idx])
-    else:
-        st.session_state[skey(apap)] = float(d0[idx] * 0.15)
+        st.session_state[f"shock_{name}"] = 0.0
+    if "Acetaminophen" in industries:
+        st.session_state["shock_Acetaminophen"] = 15.0
 
 st.sidebar.markdown("### 3 · Final-demand sliders")
-st.sidebar.caption(
-    "Drag a commodity to inject a final-demand increase. "
-    "The cascade recomputes instantly."
-)
+st.sidebar.caption("Drag a commodity to raise its final demand. The cascade recomputes instantly.")
 
-# Build per-commodity sliders. Ranges adapt to the chosen mode. The widget
-# value is driven purely by session_state (seeded with setdefault) rather than
-# a `value=` argument, which avoids the "default value + session state" warning
-# and lets the Reset / preset buttons work cleanly.
+# One % slider per commodity (% of baseline final demand).
 shocks: dict[str, float] = {}
 for i, name in enumerate(industries):
-    key = skey(name)
+    key = f"shock_{name}"
     st.session_state.setdefault(key, 0.0)
-    if mode == "pct_final_demand":
-        has_fd = d0[i] > 0
-        label = f"{name}" + ("" if has_fd else "  (no baseline FD)")
-        if not has_fd:
-            st.session_state[key] = 0.0
-        val = st.sidebar.slider(
-            label, min_value=0.0, max_value=200.0,
-            step=1.0, key=key, format="%.0f%%",
-            disabled=not has_fd,
-        )
-    elif mode == "pct_gross_output":
-        val = st.sidebar.slider(
-            name, min_value=0.0, max_value=100.0,
-            step=0.5, key=key, format="%.1f%%",
-        )
-    else:  # absolute_kg
-        # cap the slider at the industry's own baseline gross output for a sane range
-        cap = max(float(x0[i]), 1.0)
-        # keep any seeded value within the current cap
-        if st.session_state[key] > cap:
-            st.session_state[key] = cap
-        val = st.sidebar.slider(
-            f"{name}  (max {fmt_kg(cap)})",
-            min_value=0.0, max_value=cap,
-            step=cap / 200.0, key=key,
-        )
+    has_fd = d0[i] > 0
+    label = f"{name}" + ("" if has_fd else "  (no baseline FD)")
+    if not has_fd:
+        st.session_state[key] = 0.0
+    val = st.sidebar.slider(
+        label, min_value=0.0, max_value=200.0,
+        step=1.0, key=key, format="%.0f%%",
+        disabled=not has_fd,
+    )
     shocks[name] = val
 
 # --------------------------------------------------------------------------- #
 # Compute everything
 # --------------------------------------------------------------------------- #
-delta_d = m.build_delta_d(net, shocks, mode=mode)
+delta_d = m.build_delta_d(net, shocks, mode=MODE)
 casc = m.cascading_impact(net, delta_d)
 tiers = m.tier_decomposition(net, delta_d, n_tiers=n_tiers)
 waste = m.waste_cascade(net, casc["delta_x"].values)
@@ -250,9 +218,8 @@ st.divider()
 # --------------------------------------------------------------------------- #
 # Tabs
 # --------------------------------------------------------------------------- #
-tab_casc, tab_tier, tab_waste, tab_struct, tab_data = st.tabs(
-    ["📈 Cascading impact", "🪜 Tier cascade", "♻️ Waste cascade",
-     "🧭 Structural multipliers", "🧾 Data & downloads"]
+tab_casc, tab_tier, tab_waste, tab_data = st.tabs(
+    ["📈 Cascading impact", "🪜 Tier cascade", "♻️ Waste cascade", "🧾 Data & downloads"]
 )
 
 TOP_N_DEFAULT = 12
@@ -262,19 +229,24 @@ def top_frame(frame: pd.DataFrame, col: str, n: int) -> pd.DataFrame:
     return frame.reindex(frame[col].abs().sort_values(ascending=False).index).head(n)
 
 
-# ----- Cascading impact ---------------------------------------------------- #
+# ----- Cascading impact (LOG SCALE) --------------------------------------- #
 with tab_casc:
     st.subheader("Cascading output impact, Δx = L · Δd")
+    st.caption("Bars on a **log scale** (base 10) — only commodities with a positive Δx are shown.")
     top_n = st.slider("Show top N commodities", 3, len(industries),
                       min(TOP_N_DEFAULT, len(industries)), key="topn_casc")
-    top = top_frame(casc[casc["delta_x"] != 0], "delta_x", top_n).reset_index()
+    pos = casc[casc["delta_x"] > 0]
+    top = top_frame(pos, "delta_x", top_n).reset_index()
 
     if len(top):
         chart = (
             alt.Chart(top)
             .mark_bar(color="#1F6F5C")
             .encode(
-                x=alt.X("delta_x:Q", title="Incremental output Δx (kg)"),
+                x=alt.X("delta_x:Q",
+                        title="Incremental output Δx (kg, log scale)",
+                        scale=alt.Scale(type="log"),
+                        axis=alt.Axis(format="~s")),
                 y=alt.Y("industry:N", sort="-x", title=None),
                 tooltip=[
                     "industry",
@@ -317,7 +289,6 @@ with tab_tier:
             .reset_index()
             .melt(id_vars="industry", var_name="tier", value_name="value")
         )
-        # nice tier ordering & labels
         order = {c: i for i, c in enumerate(tier_cols)}
         long["order"] = long["tier"].map(order)
         pretty = {}
@@ -349,7 +320,6 @@ with tab_tier:
         )
         st.altair_chart(chart, use_container_width=True)
 
-        # System-wide tier totals
         sys_tot = tiers[tier_cols].sum()
         sys_df = pd.DataFrame({
             "tier": [pretty[c] for c in tier_cols],
@@ -387,7 +357,10 @@ with tab_waste:
             alt.Chart(top_w)
             .mark_bar(color="#C4622D")
             .encode(
-                x=alt.X("delta_waste:Q", title="Incremental waste ΔW (kg)"),
+                x=alt.X("delta_waste:Q",
+                        title="Incremental waste ΔW (kg, log scale)",
+                        scale=alt.Scale(type="log"),
+                        axis=alt.Axis(format="~s")),
                 y=alt.Y("industry:N", sort="-x", title=None),
                 tooltip=[
                     "industry",
@@ -410,54 +383,16 @@ with tab_waste:
         use_container_width=True,
     )
 
-# ----- Structural multipliers --------------------------------------------- #
-with tab_struct:
-    st.subheader("Scale-independent structural multipliers")
-    st.caption(
-        "From a unit final-demand shock — independent of the sliders. "
-        "Backward linkage = total output pulled per unit of final demand "
-        "(column sum of L)."
-    )
-    mult = m.all_industry_multipliers(net).reset_index()
-    chart = (
-        alt.Chart(mult)
-        .mark_bar(color="#4C72B0")
-        .encode(
-            x=alt.X("backward_linkage_raw:Q", title="Total output multiplier (backward linkage)"),
-            y=alt.Y("industry:N", sort="-x", title=None),
-            tooltip=[
-                "industry",
-                alt.Tooltip("backward_linkage_raw:Q", title="backward linkage", format=".3f"),
-                alt.Tooltip("forward_sensitivity_norm:Q", title="forward (norm)", format=".3f"),
-                alt.Tooltip("self_loop_coef:Q", title="self-loop a_jj", format=".4f"),
-            ],
-        )
-        .properties(height=28 * len(mult) + 40)
-    )
-    rule = alt.Chart(pd.DataFrame({"x": [1.0]})).mark_rule(
-        color="#333", strokeDash=[4, 3]).encode(x="x:Q")
-    st.altair_chart(chart + rule, use_container_width=True)
-    st.dataframe(
-        mult.set_index("industry").style.format({
-            "backward_linkage_raw": "{:.4f}", "backward_linkage_norm": "{:.3f}",
-            "forward_sensitivity_norm": "{:.3f}", "self_loop_coef": "{:.4f}",
-        }),
-        use_container_width=True,
-    )
-
 # ----- Data & downloads ---------------------------------------------------- #
 with tab_data:
     st.subheader("Download results")
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     c1.download_button("Cascading impact (CSV)", casc.to_csv().encode(),
                        "cascading_results.csv", "text/csv", use_container_width=True)
     c2.download_button("Tier decomposition (CSV)", tiers.to_csv().encode(),
                        "tier_decomposition.csv", "text/csv", use_container_width=True)
     c3.download_button("Waste cascade (CSV)", waste.to_csv().encode(),
                        "waste_cascade.csv", "text/csv", use_container_width=True)
-    c4.download_button("Structural multipliers (CSV)",
-                       m.all_industry_multipliers(net).to_csv().encode(),
-                       "all_industry_multipliers.csv", "text/csv", use_container_width=True)
 
     st.markdown("#### Current shock vector (Δd)")
     dd_df = pd.DataFrame({"industry": industries, "delta_d_kg": delta_d})
