@@ -16,11 +16,41 @@ unit-tested, and imported by the app.
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pandas as pd
 
-# Meta columns that are NOT industries (they live to the right of the Z block).
-META_COLS = ["ROE", "EXPORTS", "FINAL_DEMAND", "WASTE"]
+# Labels that are NEVER an industry, even if they appear on both axes (like ROE).
+# Matched loosely: lower-cased with every non-alphanumeric character stripped.
+_META_TOKENS = {
+    "roe", "restofeconomy", "rowrestofworld", "row",
+    "exports", "export", "imports", "import",
+    "finaldemand", "fd", "finaluse",
+    "waste", "w", "slack", "balancing", "balance",
+    "de", "domesticextraction", "naturalresources", "primaryinputs",
+    "total", "totals", "grossoutput", "output", "totaloutput", "totalinput",
+    "sum", "check",
+}
+
+# Column-name matchers for the OPTIONAL demand-side blocks. The network is built
+# from the square Z block alone; these only enrich the shock baseline / waste.
+_FINAL_DEMAND_TOKENS = {"finaldemand", "fd", "finaluse"}
+_EXPORTS_TOKENS = {"exports", "export"}
+_WASTE_TOKENS = {"waste", "w"}
+
+
+def _norm(label) -> str:
+    """Lower-case a label and drop every non-alphanumeric character."""
+    return re.sub(r"[^a-z0-9]", "", str(label).lower())
+
+
+def _find_col(df: pd.DataFrame, tokens: set[str]):
+    """Return the first column whose normalised name is in `tokens`, else None."""
+    for c in df.columns:
+        if _norm(c) in tokens:
+            return c
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -28,21 +58,39 @@ META_COLS = ["ROE", "EXPORTS", "FINAL_DEMAND", "WASTE"]
 # --------------------------------------------------------------------------- #
 def load_piot(source):
     """
-    Load a raw PIOT CSV.
+    Load a raw PIOT CSV and auto-detect its industries.
 
     `source` may be a path string or any file-like object (e.g. a Streamlit
-    UploadedFile). Industries are every column that is not a meta column and
-    not an unnamed/spare column.
+    UploadedFile). The table is treated GENERICALLY: an industry is any label
+    that appears on BOTH the row and the column axis (i.e. the square
+    inter-industry / Z block) and is not a recognised meta label (ROE, IMPORTS,
+    EXPORTS, FINAL_DEMAND, WASTE, SLACK, totals, …). This means the analysis can
+    be built from the Z-matrix alone — the Imports, Exports and Final-demand
+    columns are optional and are never required to identify the industries.
 
     Returns
     -------
     (df, industries) : (pandas.DataFrame, list[str])
     """
-    df = pd.read_csv(source, index_col=0).fillna(0.0)
+    df = pd.read_csv(source, index_col=0)
+    # Trim whitespace on labels so " ACETONE" and "ACETONE" match.
+    df.index = [str(i).strip() for i in df.index]
+    df.columns = [str(c).strip() for c in df.columns]
+    # Everything numeric; blanks / non-numeric become 0.
+    df = df.apply(pd.to_numeric, errors="coerce").fillna(0.0)
+
+    row_norms = {_norm(i) for i in df.index}
     industries = [
         c for c in df.columns
-        if c not in META_COLS and not str(c).startswith("Unnamed:")
+        if not str(c).startswith("Unnamed:")
+        and _norm(c) in row_norms          # appears on both axes -> part of Z
+        and _norm(c) not in _META_TOKENS   # but is not a meta block
     ]
+    if not industries:
+        raise ValueError(
+            "No industries found. A PIOT needs the same commodity labels on both "
+            "the rows and the columns (the square inter-industry block)."
+        )
     return df, industries
 
 
@@ -52,10 +100,18 @@ def load_piot(source):
 def build_network(df: pd.DataFrame, industries: list[str],
                   remove_self_loops: bool = False) -> dict:
     """
-    Build Z, x0, A and L from a loaded PIOT dataframe.
+    Build Z, x0, A and L from a loaded PIOT dataframe, using the Z-matrix alone.
 
-    x_j (gross output of industry j) is the row sum across all industry cells
-    plus the meta columns ROE + EXPORTS + FINAL_DEMAND + WASTE.
+    Gross output x_j is taken as the TOTAL INPUT read down each industry column
+    (every row present — inter-industry cells plus any supply-side rows such as
+    ROE / IMPORTS / SLACK). By mass balance this equals total output, and it is
+    computed WITHOUT touching the Exports, Final-demand or Waste columns, so the
+    construction is independent of them and works for any PIOT.
+
+    The baseline final-demand vector d0 (used only to scale the demand sliders)
+    is taken from a Final-demand column when one exists; otherwise it is derived
+    as x0 minus inter-industry deliveries (net final output). The baseline waste
+    vector w0 is taken from a Waste column when one exists, else zeros.
 
     Raises
     ------
@@ -65,7 +121,12 @@ def build_network(df: pd.DataFrame, industries: list[str],
     """
     Z = df.loc[industries, industries].values.astype(float)
 
-    x0 = df.loc[industries, industries + META_COLS].sum(axis=1).values.astype(float)
+    # x_j = total input read down industry column j over EVERY row present.
+    # This uses only the industry columns, never the demand-side columns.
+    x0 = df[industries].sum(axis=0).reindex(industries).values.astype(float)
+    # Fall back to the inter-industry row total where a column total is missing.
+    row_use = Z.sum(axis=1)
+    x0 = np.where(x0 > 0, x0, row_use)
     x0 = np.where(x0 == 0, 1e-9, x0)
 
     A = Z / x0[np.newaxis, :]
@@ -85,8 +146,27 @@ def build_network(df: pd.DataFrame, industries: list[str],
         )
     L = np.linalg.inv(identity - A)
 
-    d0 = df.loc[industries, "FINAL_DEMAND"].values.astype(float)
-    w0 = df.loc[industries, "WASTE"].values.astype(float)
+    # ---- Optional demand-side blocks (never required to build A / L) -------- #
+    fd_col = _find_col(df, _FINAL_DEMAND_TOKENS)
+    exp_col = _find_col(df, _EXPORTS_TOKENS)
+    waste_col = _find_col(df, _WASTE_TOKENS)
+
+    if fd_col is not None:
+        d0 = df.loc[industries, fd_col].values.astype(float)
+        if exp_col is not None:  # exports are also final deliveries
+            d0 = d0 + df.loc[industries, exp_col].values.astype(float)
+        d0_source = f"'{fd_col}'" + (f" + '{exp_col}'" if exp_col is not None else "")
+    else:
+        # Derive net final output from the Z-matrix: x0 - inter-industry use.
+        d0 = np.clip(x0 - row_use, 0.0, None)
+        d0_source = "derived from the Z-matrix (gross output − inter-industry use)"
+
+    if waste_col is not None:
+        w0 = df.loc[industries, waste_col].values.astype(float)
+        w0_source = f"'{waste_col}'"
+    else:
+        w0 = np.zeros(n, dtype=float)
+        w0_source = "no waste column found (waste cascade unavailable)"
 
     return {
         "Z": Z,
@@ -98,6 +178,9 @@ def build_network(df: pd.DataFrame, industries: list[str],
         "industries": industries,
         "spectral_radius": spectral_radius,
         "self_loop_coef": self_loop_coef,
+        "d0_source": d0_source,
+        "w0_source": w0_source,
+        "has_waste": waste_col is not None,
     }
 
 

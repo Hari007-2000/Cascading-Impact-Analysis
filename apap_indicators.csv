@@ -1,0 +1,13 @@
+indicator,group,value,unit,description,better_direction
+Domestic Extraction (DE),Direct,12000000000,kg/yr,Raw materials extracted from the domestic environment for the network,lower
+Direct Material Input (DMI),Direct,18000000000,kg/yr,Domestic extraction plus imports entering the network,lower
+Domestic Material Consumption (DMC),Direct,15000000000,kg/yr,DMI minus exports; apparent material consumption,lower
+Imports,Direct,6000000000,kg/yr,Material inputs imported into the network,lower
+Exports,Direct,3000000000,kg/yr,Material outputs exported from the network,higher
+Physical Trade Balance (PTB),Direct,3000000000,kg/yr,Imports minus exports; net physical trade,lower
+Domestic Processed Output (DPO),Direct,9000000000,kg/yr,Processed material released to the environment (emissions + wastes),lower
+Net Additions to Stock (NAS),Direct,6000000000,kg/yr,Material accumulated in in-use stock,higher
+Raw Material Input (RMI),Leontief,24000000000,kg/yr,Direct plus indirect (upstream) raw material required per final demand,lower
+Raw Material Consumption (RMC / Material Footprint),Leontief,20000000000,kg/yr,Material footprint of final demand via the Leontief inverse,lower
+Total Material Requirement (TMR),Leontief,31000000000,kg/yr,RMI including unused extraction across the full supply chain,lower
+Waste Footprint,Leontief,8500000000,kg/yr,Total upstream waste embodied in final demand,lower

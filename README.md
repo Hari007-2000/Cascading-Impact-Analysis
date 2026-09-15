@@ -1,13 +1,29 @@
 # Cascading Impact Explorer
 
 An interactive **Streamlit** app for the demand-driven Leontief cascading-impact
-model on a Physical Input–Output Table (PIOT). Slide the final-demand increase
-for any commodity and see, live:
+model on a Physical Input–Output Table (PIOT). It opens on an **Overview** page
+(the tiered supply-chain figure, why cascading-impact analysis matters, and the
+basic maths), then lets you slide the final-demand increase for any commodity and
+see, live:
 
 - **Cascading output impact** — `Δx = L · Δd`
 - **Tier-level cascade** — `Δx = Σₖ Aᵏ · Δd` (own demand → direct suppliers → indirect → deeper)
 - **Waste cascade** — `ΔWⱼ = gⱼ · Δxⱼ`, where `gⱼ = W₀ⱼ / x₀ⱼ`
 - **Structural multipliers** — scale-independent backward/forward linkages from a unit shock
+
+## Generic for any PIOT
+
+The network is built from the **Z-matrix alone**. Industries are auto-detected as
+the labels that appear on **both** the row and column axes (the square
+inter-industry block); recognised meta labels (ROE, Imports, Exports,
+Final-demand, Waste, SLACK, totals) are excluded automatically, matched
+case- and punctuation-insensitively. Gross output `x_j` is read down each industry
+column (total input = total output), so the **Imports, Exports and Final-demand
+columns are optional** and never required to build `A` and `L`. When a Final-demand
+column is absent the shock baseline is derived from the Z-matrix
+(`x − inter-industry use`); when a Waste column is absent the waste cascade is
+simply flagged as unavailable. This fixes the earlier
+`"['Exports'] not in index"` error and lets the same tool run on any network.
 
 It reproduces the methodology in `piot_cascading_impact_nsf_workshop_final.py`
 (the NSF workshop notebook) and ships with the bundled Acetaminophen "Model D"

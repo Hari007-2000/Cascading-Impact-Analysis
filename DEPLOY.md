@@ -17,7 +17,7 @@ top level (the CSV is already there):
 **Easiest way (no command line):**
 1. Go to https://github.com/Hari007-2000/Cascading-Impact-Analysis
 2. Click **Add file → Upload files**
-3. Drag in `app.py`, `model.py`, and `requirements.txt`
+3. Drag in `app.py`, `model.py`, `requirements.txt`, and `apap_indicators.csv`
 4. Click **Commit changes**
 
 **Or with git:**
