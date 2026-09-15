@@ -36,7 +36,9 @@ PIOT. Verified: a 15% Acetaminophen final-demand shock gives total Δx ≈
 |------|---------|
 | `app.py` | Streamlit UI (sliders, charts, tabs, downloads) |
 | `model.py` | Pure NumPy/pandas model — load, build A & L, shocks, tiers, waste. No UI, easy to unit-test. |
-| `PIOT_ModelD_APAP_workshop.csv` | Bundled baseline PIOT (16 commodities) |
+| `PIOT APAP Model Cascading 1.csv` | Bundled baseline PIOT (16 commodities) |
+| `APAP_Exports_16.csv` | **Default final-demand file** — used when an uploaded PIOT has no final-demand column |
+| `piot_tiers.png` | Tiered supply-chain figure shown on the Overview page |
 | `requirements.txt` | Python dependencies |
 
 ## Run it
@@ -65,12 +67,22 @@ example. The number of explicit supply-chain tiers is adjustable (2–6).
 
 **Tabs**
 
+- **📖 Overview** — the tiered supply-chain figure, why cascading-impact analysis
+  is needed, and the basic maths (A, L, Δx = L·Δd, tier decomposition, waste).
 - **📈 Cascading impact** — Δx per commodity, % of baseline output, scaled output.
 - **🪜 Tier cascade** — stacked contribution of each tier per commodity, plus the
   system-wide split. Tiers sum exactly to the Leontief total.
 - **♻️ Waste cascade** — incremental waste per commodity from baseline waste intensity.
-- **🧭 Structural multipliers** — backward-linkage multipliers (unit shock, slider-independent).
 - **🧾 Data & downloads** — export every result table as CSV, inspect the loaded PIOT.
+
+## Default final demand
+
+When an uploaded PIOT has **no final-demand column**, the shock baseline is taken
+from the bundled `APAP_Exports_16.csv` (its `FINAL_DEMAND` + `EXPORTS`), matched to
+the network's industries by name and — when the row counts line up — by position,
+so abbreviated labels (e.g. `ACETANH` ↔ `Acetic_Anhydride`, `PETROFRAC` ↔
+`Naphtha`) still map through. A PIOT that carries its own final-demand column uses
+that instead; if neither is available the baseline is derived from the Z-matrix.
 
 ## Bring your own PIOT
 
