@@ -147,16 +147,22 @@ except Exception as exc:  # noqa: BLE001
     st.error(f"Could not build the network from this PIOT: {exc}")
     st.stop()
 
-x0 = net["x0"]
-d0 = net["d0"]
+x0 = np.asarray(net["x0"], dtype=float)
+d0 = np.asarray(net["d0"], dtype=float)
 
-# Shock mode is fixed: % increase in each commodity's baseline final demand.
-MODE = "pct_final_demand"
+# Per-commodity reference used to size each slider's injection. Where a commodity
+# has a positive baseline final demand we shock a % of THAT (notebook-faithful);
+# where it has none, we shock a % of its gross output instead, so every slider is
+# always usable and the user can always increase final demand.
+shock_base = np.where(d0 > 0, d0, x0)
+uses_output = d0 <= 0  # which commodities fall back to the gross-output basis
 
 st.sidebar.markdown("### 2 · Shock definition")
 st.sidebar.caption(
-    "Each slider is a **% increase in that commodity's baseline final demand**. "
-    "Δdᵢ = d₀ᵢ × (slider ÷ 100)."
+    "Each slider injects extra **final demand** for a commodity. For a commodity "
+    "with a baseline final demand the slider is a **% of that baseline**; for one "
+    "with none it is a **% of its gross output** (marked *× output*). "
+    "Δdᵢ = baseᵢ × (slider ÷ 100)."
 )
 
 n_tiers = st.sidebar.slider(
@@ -181,26 +187,28 @@ if colq2.button("APAP +15%", use_container_width=True,
 st.sidebar.markdown("### 3 · Final-demand sliders")
 st.sidebar.caption("Drag a commodity to raise its final demand. The cascade recomputes instantly.")
 
-# One % slider per commodity (% of baseline final demand).
+# One % slider per commodity — always enabled.
 shocks: dict[str, float] = {}
 for i, name in enumerate(industries):
     key = f"shock_{name}"
     st.session_state.setdefault(key, 0.0)
-    has_fd = d0[i] > 0
-    label = f"{name}" + ("" if has_fd else "  (no baseline FD)")
-    if not has_fd:
-        st.session_state[key] = 0.0
+    label = f"{name}" + ("  (× output)" if uses_output[i] else "")
     val = st.sidebar.slider(
         label, min_value=0.0, max_value=200.0,
         step=1.0, key=key, format="%.0f%%",
-        disabled=not has_fd,
     )
     shocks[name] = val
 
 # --------------------------------------------------------------------------- #
 # Compute everything
 # --------------------------------------------------------------------------- #
-delta_d = m.build_delta_d(net, shocks, mode=MODE)
+# Δdᵢ = shock_baseᵢ × (slider% ÷ 100), where shock_base is the baseline final
+# demand when positive, else gross output. This never depends on a non-zero FD.
+delta_d = np.array(
+    [shock_base[i] * (float(shocks[name]) / 100.0)
+     for i, name in enumerate(industries)],
+    dtype=float,
+)
 casc = m.cascading_impact(net, delta_d)
 tiers = m.tier_decomposition(net, delta_d, n_tiers=n_tiers)
 waste = m.waste_cascade(net, casc["delta_x"].values)
