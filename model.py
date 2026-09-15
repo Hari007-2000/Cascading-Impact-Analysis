@@ -228,19 +228,30 @@ def build_network(df: pd.DataFrame, industries: list[str],
     exp_col = _find_col(df, _EXPORTS_TOKENS)
     waste_col = _find_col(df, _WASTE_TOKENS)
 
+    d0 = None
+    d0_source = None
+
+    # 1) The PIOT's own final-demand column (+ exports) — only if it carries
+    #    any actual value. An all-zero column counts as "no final demand".
     if fd_col is not None:
-        d0 = df.loc[industries, fd_col].values.astype(float)
+        cand = df.loc[industries, fd_col].values.astype(float)
         if exp_col is not None:  # exports are also final deliveries
-            d0 = d0 + df.loc[industries, exp_col].values.astype(float)
-        d0_source = f"'{fd_col}'" + (f" + '{exp_col}'" if exp_col is not None else "")
-    elif fd_fallback is not None:
-        # No final-demand column in the PIOT: use the bundled default file.
+            cand = cand + df.loc[industries, exp_col].values.astype(float)
+        if np.nansum(cand) > 0:
+            d0 = cand
+            d0_source = f"'{fd_col}'" + (f" + '{exp_col}'" if exp_col is not None else "")
+
+    # 2) The bundled default final-demand file, matched to these industries.
+    if d0 is None and fd_fallback is not None:
         fd_fb, exp_fb, matched = _match_fallback(fd_fallback, industries)
-        d0 = fd_fb + exp_fb
-        d0_source = (f"bundled default final-demand file "
-                     f"({matched}/{len(industries)} commodities matched)")
-    else:
-        # Derive net final output from the Z-matrix: x0 - inter-industry use.
+        cand = fd_fb + exp_fb
+        if np.nansum(cand) > 0:
+            d0 = cand
+            d0_source = (f"bundled default final-demand file "
+                         f"({matched}/{len(industries)} commodities matched)")
+
+    # 3) Derive net final output from the Z-matrix: x0 - inter-industry use.
+    if d0 is None:
         d0 = np.clip(x0 - row_use, 0.0, None)
         d0_source = "derived from the Z-matrix (gross output − inter-industry use)"
 

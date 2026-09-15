@@ -340,12 +340,24 @@ def top_frame(frame: pd.DataFrame, col: str, n: int) -> pd.DataFrame:
     return frame.reindex(frame[col].abs().sort_values(ascending=False).index).head(n)
 
 
+def top_n_slider(label: str, key: str, default: int = TOP_N_DEFAULT) -> int:
+    """A 'show top N' slider that is safe for tiny networks.
+
+    Streamlit rejects a slider whose min == max, so when there are 3 or fewer
+    industries we simply show them all instead of drawing a slider.
+    """
+    n = len(industries)
+    if n <= 3:
+        st.caption(f"Showing all {n} commodities.")
+        return n
+    return st.slider(label, 3, n, min(default, n), key=key)
+
+
 # ----- Cascading impact --------------------------------------------------- #
 with tab_casc:
     st.subheader("Cascading output impact, Δx = L · Δd")
     st.caption("Incremental gross output forced across the network, ranked by magnitude.")
-    top_n = st.slider("Show top N commodities", 3, len(industries),
-                      min(TOP_N_DEFAULT, len(industries)), key="topn_casc")
+    top_n = top_n_slider("Show top N commodities", key="topn_casc")
     pos = casc[casc["delta_x"] != 0]
     top = top_frame(pos, "delta_x", top_n).reset_index()
 
@@ -389,8 +401,7 @@ with tab_tier:
         "Tiers sum exactly to the Leontief total."
     )
     tier_cols = [c for c in tiers.columns if c != "total"]
-    top_n_t = st.slider("Show top N commodities", 3, len(industries),
-                        min(8, len(industries)), key="topn_tier")
+    top_n_t = top_n_slider("Show top N commodities", key="topn_tier", default=8)
     top_t = top_frame(tiers[tiers["total"] != 0], "total", top_n_t)
 
     if len(top_t):
@@ -461,8 +472,7 @@ with tab_waste:
         st.info("This PIOT has no Waste column, so waste intensities are zero and "
                 "the waste cascade is unavailable. Add a 'WASTE' column to enable it.",
                 icon="♻️")
-    top_n_w = st.slider("Show top N commodities", 3, len(industries),
-                        min(10, len(industries)), key="topn_waste")
+    top_n_w = top_n_slider("Show top N commodities", key="topn_waste", default=10)
     wpos = waste[waste["delta_waste"] > 0]
     top_w = top_frame(wpos, "delta_waste", top_n_w).reset_index()
 
